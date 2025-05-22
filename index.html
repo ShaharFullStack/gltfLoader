@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Model Viewer - Walking Animation</title>
+    <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.5.0/model-viewer.min.js"></script>
+    <style>
+        /* Basic styling to make the model viewer fill the page */
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden; /* Prevents scrollbars on the body */
+            font-family: 'Inter', sans-serif; /* Using Inter font as requested */
+        }
+        model-viewer {
+            width: 100%;
+            height: 100%;
+            background-color: #e0e7ff; /* A light, pleasant background color */
+            border-radius: 0; /* Model viewer itself usually doesn't need rounded corners if it's full screen */
+            --mv-toolbar-button-size: 32px; /* Adjusting toolbar button size for better touch targets */
+        }
+        /* Style for the loading poster, if you add one */
+        .poster-class {
+            object-fit: cover; /* Ensure poster image covers the area */
+        }
+
+        /* Fallback message for when model-viewer is not supported */
+        .fallback-message {
+            display: none; /* Hidden by default */
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 20px;
+            background-color: #fff3cd; /* Light yellow for warning */
+            border: 1px solid #ffeeba;
+            border-radius: 8px;
+            text-align: center;
+            color: #856404;
+        }
+        model-viewer:not(:defined) ~ .fallback-message {
+            display: block; /* Show if model-viewer is not defined */
+        }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- 
+      model-viewer component to display the 3D model.
+      - src: URL to the .glb model file.
+      - alt: Accessibility text for the model.
+      - auto-rotate: Enables automatic rotation of the model.
+      - camera-controls: Allows user interaction to rotate and zoom the model.
+      - shadow-intensity: Controls the darkness of the shadow.
+      - ar: Enables Augmented Reality mode if supported.
+      - ar-modes: Specifies preferred AR modes.
+      - ios-src: (Optional) URL to a .usdz model for AR on iOS Quick Look.
+      - environment-image: (Optional) For reflections and ambient lighting. 'neutral' is a good default.
+      - exposure: (Optional) Adjusts the brightness of the model.
+      - camera-orbit: (Optional) Sets the initial camera position and orientation.
+      - poster: (Optional) Image to display while the model is loading.
+      - autoplay: ADDED - This will play the default animation in the model.
+      - animation-name: (Optional) If you know the specific name of the animation. 'autoplay' usually works for the default.
+    -->
+    <model-viewer
+        src= "[PATH_TO_FILE]"
+        alt="A 3D model of a character walking with skin texture"
+        auto-rotate
+        autoplay camera-controls
+        shadow-intensity="1.2"
+        exposure="1.0"
+        environment-image="neutral" 
+        ar
+        ar-modes="webxr scene-viewer quick-look"
+        poster="https://placehold.co/1920x1080/e0e7ff/333333?text=Loading+3D+Model..."
+        class="poster-class"
+        touch-action="pan-y" 
+        camera-target="0m 1m 0m" 
+        min-camera-orbit="auto auto 5%" 
+        max-camera-orbit="auto auto 300%"
+        >
+        <button slot="ar-button" style="background-color: #ffffff; border-radius: 8px; border: none; padding: 10px 16px; font-weight: 600; cursor: pointer; position: absolute; bottom: 20px; right: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.15);">
+            View in AR
+        </button>
+
+        <div class="progress-bar" slot="progress-bar" style="height: 4px; background-color: #3b82f6; width: 0%;"></div>
+
+    </model-viewer>
+
+    <div class="fallback-message">
+        <p>Sorry, your browser doesn't support 3D model viewing.</p>
+        <p>Please try a modern browser like Chrome, Firefox, Safari, or Edge.</p>
+    </div>
+
+    <script>
+        // Wait until the <model-viewer> custom element is defined and ready.
+        customElements.whenDefined('model-viewer').then(() => {
+            const modelViewerElement = document.querySelector('model-viewer');
+
+            // Check if the model-viewer element was found
+            if (!modelViewerElement) {
+                console.error('Failed to find the model-viewer element after it was defined.');
+                return; // Exit if the element is not found
+            }
+
+            // Get the progress bar element from the slot (it's in the light DOM)
+            const progressBar = modelViewerElement.querySelector('.progress-bar');
+            
+            // Check if the progress bar element was found
+            if (!progressBar) {
+                console.warn('Progress bar element not found within model-viewer. Ensure slot="progress-bar" is correctly set on the div with class="progress-bar".');
+            }
+
+            // Listen for the 'progress' event on the model-viewer element
+            modelViewerElement.addEventListener('progress', (event) => {
+                if (progressBar) { // Only update if progressBar exists
+                    const progress = event.detail.totalProgress * 100;
+                    progressBar.style.width = `${progress}%`; // Update the width of the progress bar
+                    
+                    // Optionally hide the progress bar once loading is complete
+                    if (progress === 100) {
+                        setTimeout(() => { 
+                            if (progressBar) progressBar.style.display = 'none'; 
+                        }, 500); // Delay hiding slightly for visual effect
+                    }
+                }
+            });
+            
+            // You can also explicitly play an animation by name if needed:
+            // modelViewerElement.animationName = 'Walk'; // Or whatever the animation is named in the GLB
+            // modelViewerElement.play();
+
+        }).catch(error => {
+            // Catch any errors that occur while waiting for the element definition or during setup
+            console.error("Error during model-viewer setup:", error);
+        });
+    </script>
+</body>
+</html>
