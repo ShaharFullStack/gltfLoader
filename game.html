@@ -1,0 +1,980 @@
+import React, { useState, useEffect, useCallback, useRef } from ‘react’;
+import { Trophy, RotateCcw, User, Shield, Move, Info, BookOpen, Target, Zap, Volume2, VolumeX } from ‘lucide-react’;
+import * as THREE from ‘three’;
+
+const QuoridorGame3D = () => {
+const BOARD_SIZE = 9;
+const WALLS_PER_PLAYER = 10;
+const CELL_SIZE = 1.2;
+const WALL_HEIGHT = 0.8;
+const WALL_WIDTH = 0.1;
+
+// Game state
+const [currentPlayer, setCurrentPlayer] = useState(1);
+const [player1Position, setPlayer1Position] = useState({ row: 8, col: 4 });
+const [player2Position, setPlayer2Position] = useState({ row: 0, col: 4 });
+const [horizontalWalls, setHorizontalWalls] = useState(new Set());
+const [verticalWalls, setVerticalWalls] = useState(new Set());
+const [wallsRemaining, setWallsRemaining] = useState({ 1: WALLS_PER_PLAYER, 2: WALLS_PER_PLAYER });
+const [gameMode, setGameMode] = useState(‘move’);
+const [wallPlacementStage, setWallPlacementStage] = useState(1);
+const [firstWallSegment, setFirstWallSegment] = useState(null);
+const [winner, setWinner] = useState(null);
+const [showInstructions, setShowInstructions] = useState(false);
+const [activeTab, setActiveTab] = useState(‘basic’);
+const [soundEnabled, setSoundEnabled] = useState(true);
+const [hoveredCell, setHoveredCell] = useState(null);
+const [hoveredWall, setHoveredWall] = useState(null);
+
+// Three.js refs
+const mountRef = useRef(null);
+const sceneRef = useRef(null);
+const rendererRef = useRef(null);
+const cameraRef = useRef(null);
+const boardCellsRef = useRef([]);
+const wallObjectsRef = useRef([]);
+const player1ModelRef = useRef(null);
+const player2ModelRef = useRef(null);
+const raycasterRef = useRef(new THREE.Raycaster());
+const mouseRef = useRef(new THREE.Vector2());
+const animationIdRef = useRef(null);
+const clockRef = useRef(new THREE.Clock());
+
+// Audio system
+const audioContextRef = useRef(null);
+const soundsRef = useRef({});
+
+// Initialize audio
+const initAudio = useCallback(() => {
+if (!audioContextRef.current) {
+audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+}
+}, []);
+
+// Create sound effect
+const createSound = useCallback((frequency, duration, type = ‘sine’) => {
+if (!soundEnabled || !audioContextRef.current) return;
+
+```
+const oscillator = audioContextRef.current.createOscillator();
+const gainNode = audioContextRef.current.createGain();
+
+oscillator.connect(gainNode);
+gainNode.connect(audioContextRef.current.destination);
+
+oscillator.frequency.setValueAtTime(frequency, audioContextRef.current.currentTime);
+oscillator.type = type;
+
+gainNode.gain.setValueAtTime(0.1, audioContextRef.current.currentTime);
+gainNode.gain.exponentialRampToValueAtTime(0.01, audioContextRef.current.currentTime + duration);
+
+oscillator.start(audioContextRef.current.currentTime);
+oscillator.stop(audioContextRef.current.currentTime + duration);
+```
+
+}, [soundEnabled]);
+
+// Play sound effects
+const playSound = useCallback((soundType) => {
+switch (soundType) {
+case ‘move’:
+createSound(440, 0.2, ‘sine’);
+break;
+case ‘wall’:
+createSound(220, 0.3, ‘square’);
+break;
+case ‘win’:
+createSound(523, 0.5, ‘triangle’);
+setTimeout(() => createSound(659, 0.5, ‘triangle’), 200);
+setTimeout(() => createSound(784, 0.8, ‘triangle’), 400);
+break;
+case ‘hover’:
+createSound(330, 0.1, ‘sine’);
+break;
+}
+}, [createSound]);
+
+// GLB Loader
+const loadGLBModel = useCallback(async (url) => {
+return new Promise((resolve, reject) => {
+const loader = new THREE.GLTFLoader();
+loader.load(
+url,
+(gltf) => {
+const model = gltf.scene;
+model.scale.set(0.5, 0.5, 0.5);
+model.position.y = 0.1;
+resolve(model);
+},
+(progress) => {
+console.log(‘Loading progress:’, (progress.loaded / progress.total * 100) + ‘%’);
+},
+(error) => {
+console.error(‘Error loading model:’, error);
+// Fallback to basic geometry
+const geometry = new THREE.ConeGeometry(0.3, 0.8, 8);
+const material = new THREE.MeshPhongMaterial({ color: 0x4169E1 });
+const fallback = new THREE.Mesh(geometry, material);
+fallback.position.y = 0.4;
+resolve(fallback);
+}
+);
+});
+}, []);
+
+// Initialize Three.js scene
+const initThreeJS = useCallback(async () => {
+if (!mountRef.current) return;
+
+```
+// Scene setup
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87CEEB);
+scene.fog = new THREE.Fog(0x87CEEB, 10, 50);
+sceneRef.current = scene;
+
+// Camera setup
+const camera = new THREE.PerspectiveCamera(
+  60,
+  mountRef.current.clientWidth / mountRef.current.clientHeight,
+  0.1,
+  1000
+);
+camera.position.set(12, 15, 12);
+camera.lookAt(0, 0, 0);
+cameraRef.current = camera;
+
+// Renderer setup
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.setClearColor(0x87CEEB, 1);
+rendererRef.current = renderer;
+mountRef.current.appendChild(renderer.domElement);
+
+// Lighting
+const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+scene.add(ambientLight);
+
+const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+directionalLight.position.set(20, 20, 20);
+directionalLight.castShadow = true;
+directionalLight.shadow.mapSize.width = 2048;
+directionalLight.shadow.mapSize.height = 2048;
+directionalLight.shadow.camera.near = 0.5;
+directionalLight.shadow.camera.far = 50;
+directionalLight.shadow.camera.left = -20;
+directionalLight.shadow.camera.right = 20;
+directionalLight.shadow.camera.top = 20;
+directionalLight.shadow.camera.bottom = -20;
+scene.add(directionalLight);
+
+// Point lights for atmosphere
+const pointLight1 = new THREE.PointLight(0x00ffff, 0.5, 10);
+pointLight1.position.set(5, 8, 5);
+scene.add(pointLight1);
+
+const pointLight2 = new THREE.PointLight(0xff00ff, 0.5, 10);
+pointLight2.position.set(-5, 8, -5);
+scene.add(pointLight2);
+
+// Create board
+const boardGeometry = new THREE.BoxGeometry(
+  BOARD_SIZE * CELL_SIZE + 1,
+  0.2,
+  BOARD_SIZE * CELL_SIZE + 1
+);
+const boardMaterial = new THREE.MeshPhongMaterial({ 
+  color: 0x8B4513,
+  shininess: 30
+});
+const board = new THREE.Mesh(boardGeometry, boardMaterial);
+board.position.set(
+  (BOARD_SIZE - 1) * CELL_SIZE / 2,
+  -0.1,
+  (BOARD_SIZE - 1) * CELL_SIZE / 2
+);
+board.receiveShadow = true;
+scene.add(board);
+
+// Create board cells
+boardCellsRef.current = [];
+for (let row = 0; row < BOARD_SIZE; row++) {
+  boardCellsRef.current[row] = [];
+  for (let col = 0; col < BOARD_SIZE; col++) {
+    const cellGeometry = new THREE.BoxGeometry(CELL_SIZE * 0.9, 0.05, CELL_SIZE * 0.9);
+    let cellMaterial;
+    
+    // Goal zones
+    if (row === 0) {
+      cellMaterial = new THREE.MeshPhongMaterial({ 
+        color: 0xFF6B6B,
+        transparent: true,
+        opacity: 0.8,
+        emissive: 0x330000
+      });
+    } else if (row === BOARD_SIZE - 1) {
+      cellMaterial = new THREE.MeshPhongMaterial({ 
+        color: 0x4ECDC4,
+        transparent: true,
+        opacity: 0.8,
+        emissive: 0x003333
+      });
+    } else {
+      cellMaterial = new THREE.MeshPhongMaterial({ 
+        color: 0xF5F5DC,
+        transparent: true,
+        opacity: 0.9
+      });
+    }
+
+    const cell = new THREE.Mesh(cellGeometry, cellMaterial);
+    cell.position.set(col * CELL_SIZE, 0.025, row * CELL_SIZE);
+    cell.receiveShadow = true;
+    cell.userData = { type: 'cell', row, col };
+    boardCellsRef.current[row][col] = cell;
+    scene.add(cell);
+  }
+}
+
+// Load player models
+try {
+  const cornModel = await loadGLBModel('https://shaharfullstack.github.io/gltfLoader/corn.glb');
+  cornModel.userData = { type: 'player', player: 1 };
+  cornModel.traverse((child) => {
+    if (child.isMesh) {
+      child.castShadow = true;
+      child.receiveShadow = true;
+    }
+  });
+  player1ModelRef.current = cornModel;
+  scene.add(cornModel);
+
+  const smokingModel = await loadGLBModel('https://shaharfullstack.github.io/gltfLoader/smoking.glb');
+  smokingModel.userData = { type: 'player', player: 2 };
+  smokingModel.traverse((child) => {
+    if (child.isMesh) {
+      child.castShadow = true;
+      child.receiveShadow = true;
+    }
+  });
+  player2ModelRef.current = smokingModel;
+  scene.add(smokingModel);
+
+  // Position players
+  updatePlayerPositions();
+} catch (error) {
+  console.error('Error loading models:', error);
+}
+
+// Mouse events
+const handleMouseMove = (event) => {
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouseRef.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  mouseRef.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  
+  raycasterRef.current.setFromCamera(mouseRef.current, camera);
+  const intersects = raycasterRef.current.intersectObjects(scene.children, true);
+  
+  if (intersects.length > 0) {
+    const object = intersects[0].object;
+    if (object.userData.type === 'cell') {
+      setHoveredCell({ row: object.userData.row, col: object.userData.col });
+    } else {
+      setHoveredCell(null);
+    }
+  }
+};
+
+const handleClick = (event) => {
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouseRef.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  mouseRef.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  
+  raycasterRef.current.setFromCamera(mouseRef.current, camera);
+  const intersects = raycasterRef.current.intersectObjects(scene.children, true);
+  
+  if (intersects.length > 0) {
+    const object = intersects[0].object;
+    if (object.userData.type === 'cell') {
+      handleCellClick(object.userData.row, object.userData.col);
+    }
+  }
+};
+
+renderer.domElement.addEventListener('mousemove', handleMouseMove);
+renderer.domElement.addEventListener('click', handleClick);
+
+// Window resize
+const handleResize = () => {
+  if (mountRef.current) {
+    camera.aspect = mountRef.current.clientWidth / mountRef.current.clientHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
+  }
+};
+window.addEventListener('resize', handleResize);
+
+// Animation loop
+const animate = () => {
+  animationIdRef.current = requestAnimationFrame(animate);
+  const delta = clockRef.current.getDelta();
+  
+  // Animate hovering effects
+  if (hoveredCell) {
+    const cell = boardCellsRef.current[hoveredCell.row]?.[hoveredCell.col];
+    if (cell && isValidMoveTarget(hoveredCell.row, hoveredCell.col)) {
+      cell.position.y = 0.025 + Math.sin(Date.now() * 0.01) * 0.02;
+      cell.material.emissive.setHex(0x004400);
+    }
+  }
+
+  // Reset non-hovered cells
+  for (let row = 0; row < BOARD_SIZE; row++) {
+    for (let col = 0; col < BOARD_SIZE; col++) {
+      const cell = boardCellsRef.current[row][col];
+      if (!hoveredCell || hoveredCell.row !== row || hoveredCell.col !== col) {
+        cell.position.y = 0.025;
+        if (row === 0) {
+          cell.material.emissive.setHex(0x330000);
+        } else if (row === BOARD_SIZE - 1) {
+          cell.material.emissive.setHex(0x003333);
+        } else {
+          cell.material.emissive.setHex(0x000000);
+        }
+      }
+    }
+  }
+
+  // Animate current player indicator
+  if (player1ModelRef.current && currentPlayer === 1) {
+    player1ModelRef.current.rotation.y += delta * 2;
+    player1ModelRef.current.position.y = 0.1 + Math.sin(Date.now() * 0.005) * 0.1;
+  }
+  if (player2ModelRef.current && currentPlayer === 2) {
+    player2ModelRef.current.rotation.y += delta * 2;
+    player2ModelRef.current.position.y = 0.1 + Math.sin(Date.now() * 0.005) * 0.1;
+  }
+
+  // Animate point lights
+  const time = Date.now() * 0.001;
+  scene.children.forEach(child => {
+    if (child.isPointLight) {
+      child.intensity = 0.5 + Math.sin(time * 2) * 0.2;
+    }
+  });
+
+  renderer.render(scene, camera);
+};
+animate();
+
+return () => {
+  window.removeEventListener('resize', handleResize);
+  renderer.domElement.removeEventListener('mousemove', handleMouseMove);
+  renderer.domElement.removeEventListener('click', handleClick);
+};
+```
+
+}, []);
+
+// Update player positions in 3D space
+const updatePlayerPositions = useCallback(() => {
+if (player1ModelRef.current) {
+const newPos = new THREE.Vector3(
+player1Position.col * CELL_SIZE,
+0.1,
+player1Position.row * CELL_SIZE
+);
+
+```
+  // Smooth animation
+  const currentPos = player1ModelRef.current.position;
+  player1ModelRef.current.position.lerp(newPos, 0.1);
+}
+
+if (player2ModelRef.current) {
+  const newPos = new THREE.Vector3(
+    player2Position.col * CELL_SIZE,
+    0.1,
+    player2Position.row * CELL_SIZE
+  );
+  
+  // Smooth animation
+  const currentPos = player2ModelRef.current.position;
+  player2ModelRef.current.position.lerp(newPos, 0.1);
+}
+```
+
+}, [player1Position, player2Position]);
+
+// Game logic functions (same as before but with 3D updates)
+const checkWinner = useCallback((p1Pos, p2Pos) => {
+if (p1Pos.row === 0) return 1;
+if (p2Pos.row === 8) return 2;
+return null;
+}, []);
+
+const isValidMove = (fromPos, toPos, otherPlayerPos) => {
+const rowDiff = Math.abs(toPos.row - fromPos.row);
+const colDiff = Math.abs(toPos.col - fromPos.col);
+
+```
+if ((rowDiff === 1 && colDiff === 0) || (rowDiff === 0 && colDiff === 1)) {
+  if (toPos.row === otherPlayerPos.row && toPos.col === otherPlayerPos.col) {
+    return false;
+  }
+  
+  if (rowDiff === 1) {
+    const wallRow = Math.min(fromPos.row, toPos.row);
+    const wallKey = `${wallRow}-${fromPos.col}`;
+    return !horizontalWalls.has(wallKey);
+  } else {
+    const wallCol = Math.min(fromPos.col, toPos.col);
+    const wallKey = `${fromPos.row}-${wallCol}`;
+    return !verticalWalls.has(wallKey);
+  }
+}
+return false;
+```
+
+};
+
+const isValidMoveTarget = (row, col) => {
+if (winner) return false;
+if (gameMode !== ‘move’) return false;
+
+```
+const currentPlayerPos = currentPlayer === 1 ? player1Position : player2Position;
+const otherPlayerPos = currentPlayer === 1 ? player2Position : player1Position;
+
+if (row === currentPlayerPos.row && col === currentPlayerPos.col) return false;
+if (row === otherPlayerPos.row && col === otherPlayerPos.col) return false;
+
+return isValidMove(currentPlayerPos, { row, col }, otherPlayerPos);
+```
+
+};
+
+const handleCellClick = (row, col) => {
+if (winner) return;
+
+```
+if (gameMode === 'move') {
+  const currentPlayerPos = currentPlayer === 1 ? player1Position : player2Position;
+  const otherPlayerPos = currentPlayer === 1 ? player2Position : player1Position;
+  
+  if (isValidMove(currentPlayerPos, { row, col }, otherPlayerPos)) {
+    const newPos = { row, col };
+    
+    if (currentPlayer === 1) {
+      setPlayer1Position(newPos);
+      const newWinner = checkWinner(newPos, player2Position);
+      if (newWinner) {
+        setWinner(newWinner);
+        playSound('win');
+      } else {
+        playSound('move');
+      }
+    } else {
+      setPlayer2Position(newPos);
+      const newWinner = checkWinner(player1Position, newPos);
+      if (newWinner) {
+        setWinner(newWinner);
+        playSound('win');
+      } else {
+        playSound('move');
+      }
+    }
+    
+    if (!winner) {
+      setCurrentPlayer(currentPlayer === 1 ? 2 : 1);
+    }
+  }
+}
+```
+
+};
+
+const addWall3D = useCallback((wallType, row, col) => {
+if (!sceneRef.current) return;
+
+```
+const wallGeometry = wallType === 'horizontal' 
+  ? new THREE.BoxGeometry(CELL_SIZE, WALL_HEIGHT, WALL_WIDTH)
+  : new THREE.BoxGeometry(WALL_WIDTH, WALL_HEIGHT, CELL_SIZE);
+
+const wallMaterial = new THREE.MeshPhongMaterial({ 
+  color: 0x8B4513,
+  shininess: 30,
+  transparent: true,
+  opacity: 0.9
+});
+
+const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+
+if (wallType === 'horizontal') {
+  wall.position.set(col * CELL_SIZE, WALL_HEIGHT / 2, (row + 0.5) * CELL_SIZE);
+} else {
+  wall.position.set((col + 0.5) * CELL_SIZE, WALL_HEIGHT / 2, row * CELL_SIZE);
+}
+
+wall.castShadow = true;
+wall.receiveShadow = true;
+wall.userData = { type: 'wall', wallType, row, col };
+
+// Add glow effect
+const glowGeometry = wallGeometry.clone();
+const glowMaterial = new THREE.MeshPhongMaterial({
+  color: 0xFFD700,
+  transparent: true,
+  opacity: 0.3,
+  emissive: 0x444400
+});
+const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+glow.scale.set(1.1, 1.1, 1.1);
+wall.add(glow);
+
+sceneRef.current.add(wall);
+wallObjectsRef.current.push(wall);
+
+// Animation
+wall.scale.set(0.1, 0.1, 0.1);
+const targetScale = new THREE.Vector3(1, 1, 1);
+const animate = () => {
+  wall.scale.lerp(targetScale, 0.1);
+  if (wall.scale.x < 0.99) {
+    requestAnimationFrame(animate);
+  }
+};
+animate();
+```
+
+}, []);
+
+const resetGame = () => {
+setCurrentPlayer(1);
+setPlayer1Position({ row: 8, col: 4 });
+setPlayer2Position({ row: 0, col: 4 });
+setHorizontalWalls(new Set());
+setVerticalWalls(new Set());
+setWallsRemaining({ 1: WALLS_PER_PLAYER, 2: WALLS_PER_PLAYER });
+setGameMode(‘move’);
+setWallPlacementStage(1);
+setFirstWallSegment(null);
+setWinner(null);
+setHoveredCell(null);
+
+```
+// Remove 3D walls
+if (sceneRef.current) {
+  wallObjectsRef.current.forEach(wall => {
+    sceneRef.current.remove(wall);
+    wall.geometry.dispose();
+    wall.material.dispose();
+  });
+  wallObjectsRef.current = [];
+}
+
+playSound('move');
+```
+
+};
+
+// Initialize
+useEffect(() => {
+initAudio();
+initThreeJS();
+
+```
+return () => {
+  if (animationIdRef.current) {
+    cancelAnimationFrame(animationIdRef.current);
+  }
+  if (rendererRef.current && mountRef.current) {
+    mountRef.current.removeChild(rendererRef.current.domElement);
+    rendererRef.current.dispose();
+  }
+};
+```
+
+}, [initAudio, initThreeJS]);
+
+useEffect(() => {
+updatePlayerPositions();
+}, [player1Position, player2Position, updatePlayerPositions]);
+
+// Instructions content
+const instructionsContent = {
+basic: {
+title: “חוקי המשחק הבסיסיים”,
+icon: <Target className="w-5 h-5" />,
+content: (
+<div className="space-y-4">
+<div className="bg-blue-50 p-4 rounded-lg">
+<h4 className="font-bold text-blue-800 mb-2">🎯 המטרה</h4>
+<p className="text-blue-700">
+הדמות הצהובה (תירס) צריכה להגיע לאזור האדום,
+והדמות המעשנת צריכה להגיע לאזור הכחול-ירוק.
+</p>
+</div>
+
+```
+      <div className="bg-green-50 p-4 rounded-lg">
+        <h4 className="font-bold text-green-800 mb-2">🚶 תזוזה</h4>
+        <p className="text-green-700">
+          לחץ על משבצת ירוקה מוארת כדי לזוז אליה.
+          הדמות תתחיל להסתובב ולקפוץ כשזה התור שלה.
+        </p>
+      </div>
+      
+      <div className="bg-purple-50 p-4 rounded-lg">
+        <h4 className="font-bold text-purple-800 mb-2">🧱 הצבת חומות</h4>
+        <p className="text-purple-700">
+          חומות תלת-ממדיות יעלו מהקרקע עם אפקטים מיוחדים.
+          כל חומה מורכבת מ-2 חלקים צמודים.
+        </p>
+      </div>
+    </div>
+  )
+},
+advanced: {
+  title: "פיצ'רים מתקדמים",
+  icon: <Zap className="w-5 h-5" />,
+  content: (
+    <div className="space-y-4">
+      <div className="bg-orange-50 p-4 rounded-lg">
+        <h4 className="font-bold text-orange-800 mb-2">🎮 גרפיקה תלת-ממדית</h4>
+        <ul className="text-orange-700 space-y-2">
+          <li>• דמויות GLB מותאמות אישית</li>
+          <li>• תאורה דינמית וצללים</li>
+          <li>• אנימציות חלקות ואפקטים</li>
+          <li>• אזורי מטרה מוארים</li>
+        </ul>
+      </div>
+      
+      <div className="bg-red-50 p-4 rounded-lg">
+        <h4 className="font-bold text-red-800 mb-2">🔊 אפקטים קוליים</h4>
+        <p className="text-red-700">
+          כל פעולה מלווה בצליל מתאים - תזוזה, הצבת חומות ונצחון!
+          ניתן להפעיל/לכבות את הקול.
+        </p>
+      </div>
+      
+      <div className="bg-gray-50 p-4 rounded-lg">
+        <h4 className="font-bold text-gray-800 mb-2">✨ חוויית משתמש</h4>
+        <p className="text-gray-700">
+          הכוונה ויזואלית, אנימציות hover מתקדמות,
+          ומשוב מיידי על כל פעולה.
+        </p>
+      </div>
+    </div>
+  )
+},
+controls: {
+  title: "בקרות המשחק",
+  icon: <Info className="w-5 h-5" />,
+  content: (
+    <div className="space-y-4">
+      <div className="bg-blue-50 p-4 rounded-lg">
+        <h4 className="font-bold text-blue-800 mb-2">🖱️ בקרות עכבר</h4>
+        <ul className="text-blue-700 space-y-2">
+          <li>• העבר עכבר על משבצות לראות אפשרויות</li>
+          <li>• משבצות ירוקות = מהלכים אפשריים</li>
+          <li>• דמות מקפצת = התור שלה</li>
+          <li>• קליק פשוט לביצוע המהלך</li>
+        </ul>
+      </div>
+      
+      <div className="bg-green-50 p-4 rounded-lg">
+        <h4 className="font-bold text-green-800 mb-2">📱 מותאם לכל מכשיר</h4>
+        <p className="text-green-700">
+          עובד מושלם על מחשב, טאבלט וסמארטפון.
+          הגרפיקה מתכוונת אוטומטית לגודל המסך.
+        </p>
+      </div>
+      
+      <div className="bg-purple-50 p-4 rounded-lg">
+        <h4 className="font-bold text-purple-800 mb-2">🎛️ הגדרות</h4>
+        <ul className="text-purple-700 space-y-2">
+          <li>• <strong>זז:</strong> מצב תזוזת השחקן</li>
+          <li>• <strong>הצב חומה:</strong> מצב הצבת חומות</li>
+          <li>• <strong>🔊:</strong> הפעל/כבה קול</li>
+          <li>• <strong>משחק חדש:</strong> איפוס מלא</li>
+        </ul>
+      </div>
+    </div>
+  )
+}
+```
+
+};
+
+return (
+<div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900" dir="rtl">
+<div className="container mx-auto px-4 py-6 max-w-7xl">
+
+```
+    {/* Header */}
+    <div className="text-center mb-6">
+      <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold text-white mb-2 bg-gradient-to-r from-yellow-400 to-orange-500 bg-clip-text text-transparent">
+        Quoridor 3D
+      </h1>
+      <p className="text-gray-300 text-sm sm:text-base">
+        משחק האסטרטגיה התלת-ממדי עם דמויות מותאמות אישית!
+      </p>
+    </div>
+
+    <div className="flex flex-col xl:flex-row gap-6">
+      
+      {/* Game Section */}
+      <div className="flex-1 flex flex-col items-center">
+        
+        {/* Game Status */}
+        <div className="bg-white/10 backdrop-blur-lg rounded-lg border border-white/20 p-4 mb-6 w-full max-w-md">
+          <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
+            <div className="flex items-center space-x-2 space-x-reverse">
+              <User className={`w-5 h-5 ${currentPlayer === 1 ? 'text-yellow-400' : 'text-gray-400'}`} />
+              <span className={`font-bold text-sm sm:text-base ${currentPlayer === 1 ? 'text-yellow-400' : 'text-gray-400'}`}>
+                תירס: {wallsRemaining[1]} חומות
+              </span>
+            </div>
+            <div className="flex items-center space-x-2 space-x-reverse">
+              <User className={`w-5 h-5 ${currentPlayer === 2 ? 'text-red-400' : 'text-gray-400'}`} />
+              <span className={`font-bold text-sm sm:text-base ${currentPlayer === 2 ? 'text-red-400' : 'text-gray-400'}`}>
+                מעשן: {wallsRemaining[2]} חומות
+              </span>
+            </div>
+          </div>
+          
+          {!winner && (
+            <div className="mt-4 text-center">
+              <p className="text-base sm:text-lg font-semibold text-white">
+                תור {currentPlayer === 1 ? 'התירס' : 'המעשן'}
+              </p>
+              <p className="text-xs sm:text-sm text-gray-300">
+                {gameMode === 'move' ? 'בחר משבצת ירוקה לתזוזה' : 'בחר מיקום לחומה'}
+              </p>
+            </div>
+          )}
+        </div>
+        
+        {/* Game Controls */}
+        <div className="flex flex-wrap justify-center gap-2 sm:gap-4 mb-6">
+          <button
+            onClick={() => {
+              setGameMode('move');
+              playSound('hover');
+            }}
+            className={`
+              px-3 py-2 sm:px-4 sm:py-2 rounded-lg font-medium transition-all duration-300 flex items-center space-x-2 space-x-reverse text-sm sm:text-base transform hover:scale-105
+              ${gameMode === 'move' 
+                ? 'bg-gradient-to-r from-blue-500 to-cyan-500 text-white shadow-lg shadow-blue-500/50' 
+                : 'bg-white/20 backdrop-blur-lg text-white hover:bg-white/30 border border-white/20'}
+            `}
+            disabled={winner}
+          >
+            <Move className="w-4 h-4 sm:w-5 sm:h-5" />
+            <span>זז</span>
+          </button>
+          
+          <button
+            onClick={() => {
+              setGameMode('wall');
+              setWallPlacementStage(1);
+              setFirstWallSegment(null);
+              playSound('hover');
+            }}
+            className={`
+              px-3 py-2 sm:px-4 sm:py-2 rounded-lg font-medium transition-all duration-300 flex items-center space-x-2 space-x-reverse text-sm sm:text-base transform hover:scale-105
+              ${gameMode === 'wall' 
+                ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg shadow-purple-500/50' 
+                : 'bg-white/20 backdrop-blur-lg text-white hover:bg-white/30 border border-white/20'}
+            `}
+            disabled={winner || wallsRemaining[currentPlayer] <= 0}
+          >
+            <Shield className="w-4 h-4 sm:w-5 sm:h-5" />
+            <span>הצב חומה</span>
+          </button>
+          
+          <button
+            onClick={() => {
+              setSoundEnabled(!soundEnabled);
+              playSound('hover');
+            }}
+            className="px-3 py-2 sm:px-4 sm:py-2 bg-white/20 backdrop-blur-lg text-white rounded-lg font-medium hover:bg-white/30 transition-all duration-300 flex items-center space-x-2 space-x-reverse text-sm sm:text-base transform hover:scale-105 border border-white/20"
+          >
+            {soundEnabled ? <Volume2 className="w-4 h-4 sm:w-5 sm:h-5" /> : <VolumeX className="w-4 h-4 sm:w-5 sm:h-5" />}
+            <span>{soundEnabled ? 'כבה קול' : 'הפעל קול'}</span>
+          </button>
+          
+          <button
+            onClick={resetGame}
+            className="px-3 py-2 sm:px-4 sm:py-2 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-lg font-medium hover:from-green-600 hover:to-emerald-600 transition-all duration-300 flex items-center space-x-2 space-x-reverse text-sm sm:text-base transform hover:scale-105 shadow-lg shadow-green-500/50"
+          >
+            <RotateCcw className="w-4 h-4 sm:w-5 sm:h-5" />
+            <span>משחק חדש</span>
+          </button>
+          
+          <button
+            onClick={() => {
+              setShowInstructions(!showInstructions);
+              playSound('hover');
+            }}
+            className="px-3 py-2 sm:px-4 sm:py-2 bg-gradient-to-r from-indigo-500 to-blue-500 text-white rounded-lg font-medium hover:from-indigo-600 hover:to-blue-600 transition-all duration-300 flex items-center space-x-2 space-x-reverse text-sm sm:text-base xl:hidden transform hover:scale-105 shadow-lg shadow-indigo-500/50"
+          >
+            <BookOpen className="w-4 h-4 sm:w-5 sm:h-5" />
+            <span>הוראות</span>
+          </button>
+        </div>
+        
+        {/* Winner Message */}
+        {winner && (
+          <div className="bg-gradient-to-r from-yellow-400 to-orange-500 rounded-lg p-4 mb-6 flex items-center space-x-3 space-x-reverse shadow-lg transform animate-pulse">
+            <Trophy className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
+            <span className="text-lg sm:text-xl font-bold text-white">
+              🎉 {winner === 1 ? 'התירס' : 'המעשן'} ניצח! 🎉
+            </span>
+          </div>
+        )}
+        
+        {/* 3D Game Board */}
+        <div className="relative">
+          <div 
+            ref={mountRef}
+            className="w-full h-[500px] sm:h-[600px] lg:h-[700px] rounded-lg overflow-hidden shadow-2xl border-4 border-white/20"
+            style={{ maxWidth: '800px' }}
+          />
+          
+          {/* Loading overlay */}
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm rounded-lg flex items-center justify-center text-white text-lg font-bold">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-12 w-12 border-4 border-white border-t-transparent mb-4 mx-auto"></div>
+              <p>טוען דמויות...</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Instructions Panel - Desktop */}
+      <div className="xl:w-96 hidden xl:block">
+        <div className="bg-white/10 backdrop-blur-lg rounded-lg border border-white/20 p-6 sticky top-6">
+          <div className="flex items-center space-x-2 space-x-reverse mb-4">
+            <BookOpen className="w-6 h-6 text-indigo-400" />
+            <h2 className="text-xl font-bold text-white">הוראות המשחק</h2>
+          </div>
+          
+          {/* Tabs */}
+          <div className="flex space-x-1 space-x-reverse mb-4 bg-white/10 rounded-lg p-1">
+            {Object.entries(instructionsContent).map(([key, tab]) => (
+              <button
+                key={key}
+                onClick={() => {
+                  setActiveTab(key);
+                  playSound('hover');
+                }}
+                className={`
+                  flex-1 flex items-center justify-center space-x-1 space-x-reverse px-3 py-2 rounded-md text-xs font-medium transition-all duration-300 transform hover:scale-105
+                  ${activeTab === key 
+                    ? 'bg-white/20 text-indigo-400 shadow-sm' 
+                    : 'text-gray-300 hover:text-white hover:bg-white/10'}
+                `}
+              >
+                {tab.icon}
+                <span className="hidden sm:inline">{tab.title}</span>
+              </button>
+            ))}
+          </div>
+          
+          {/* Tab Content */}
+          <div className="max-h-96 overflow-y-auto">
+            <h3 className="text-lg font-semibold text-white mb-3">
+              {instructionsContent[activeTab].title}
+            </h3>
+            <div className="text-gray-200">
+              {instructionsContent[activeTab].content}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {/* Mobile Instructions */}
+    {showInstructions && (
+      <div className="xl:hidden mt-6 bg-white/10 backdrop-blur-lg rounded-lg border border-white/20 p-4">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center space-x-2 space-x-reverse">
+            <BookOpen className="w-5 h-5 text-indigo-400" />
+            <h2 className="text-lg font-bold text-white">הוראות המשחק</h2>
+          </div>
+          <button
+            onClick={() => setShowInstructions(false)}
+            className="text-gray-400 hover:text-white transition-colors"
+          >
+            ✕
+          </button>
+        </div>
+        
+        {/* Mobile Tabs */}
+        <div className="flex space-x-1 space-x-reverse mb-4 bg-white/10 rounded-lg p-1">
+          {Object.entries(instructionsContent).map(([key, tab]) => (
+            <button
+              key={key}
+              onClick={() => {
+                setActiveTab(key);
+                playSound('hover');
+              }}
+              className={`
+                flex-1 flex items-center justify-center space-x-1 space-x-reverse px-2 py-2 rounded-md text-xs font-medium transition-all duration-300
+                ${activeTab === key 
+                  ? 'bg-white/20 text-indigo-400 shadow-sm' 
+                  : 'text-gray-300 hover:text-white hover:bg-white/10'}
+              `}
+            >
+              {tab.icon}
+            </button>
+          ))}
+        </div>
+        
+        {/* Mobile Content */}
+        <div>
+          <h3 className="text-base font-semibold text-white mb-3">
+            {instructionsContent[activeTab].title}
+          </h3>
+          <div className="text-gray-200">
+            {instructionsContent[activeTab].content}
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* Quick Tips */}
+    <div className="mt-6 bg-white/10 backdrop-blur-lg rounded-lg border border-white/20 p-4">
+      <h3 className="text-lg font-bold text-white mb-2 text-center">💡 טיפים מהירים</h3>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+        <div className="text-center p-3 bg-blue-500/20 rounded border border-blue-500/30">
+          <div className="text-blue-300 font-semibold">🎯 דמויות</div>
+          <div className="text-blue-200">תירס לאדום, מעשן לכחול-ירוק</div>
+        </div>
+        <div className="text-center p-3 bg-purple-500/20 rounded border border-purple-500/30">
+          <div className="text-purple-300 font-semibold">🧱 חומות 3D</div>
+          <div className="text-purple-200">עולות מהקרקע עם אפקטים</div>
+        </div>
+        <div className="text-center p-3 bg-green-500/20 rounded border border-green-500/30">
+          <div className="text-green-300 font-semibold">⚡ חלק</div>
+          <div className="text-green-200">אנימציות ואפקטים מתקדמים</div>
+        </div>
+        <div className="text-center p-3 bg-orange-500/20 rounded border border-orange-500/30">
+          <div className="text-orange-300 font-semibold">🔊 קול</div>
+          <div className="text-orange-200">צלילים לכל פעולה</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+```
+
+);
+};
+
+export default QuoridorGame3D;
